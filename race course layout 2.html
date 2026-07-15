@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Race Course — Layout &amp; Live Positions</title>
+
+<!-- ============================================================
+  SETUP:
+  1. Firebase config below is wired to the RACEMASTER project.
+     Database rules should be open read/write (same as Finish Line):
+     { "rules": { ".read": true, ".write": true } }
+  2. Host on GitHub Pages (plain file:// triggers OSM tile blocks).
+  3. PRO password matches Finish Line (1777) so logins stay
+     consistent once these apps are merged into one shell.
+============================================================= -->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+
+<style>
+:root{
+  --navy:#0B1F3A; --navy-2:#123057; --navy-3:#1A3E6E;
+  --teal:#1F8A82; --teal-bright:#2EC4B6; --orange:#FF6B35;
+  --cream:#F4F1E8; --ink:#0B1F3A; --danger:#D64545;
+  --line:rgba(244,241,232,0.14);
+  --font-display:'Oswald',sans-serif; --font-body:'Inter',sans-serif; --font-mono:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box;}
+html,body{ margin:0; padding:0; height:100%; width:100%; font-family:var(--font-body); background:var(--navy); color:var(--cream); overscroll-behavior:none; -webkit-tap-highlight-color:transparent; user-select:none; }
+#map{ position:absolute; inset:0; z-index:0; background:#0a1a2e; }
+.leaflet-container{ font-family:var(--font-body); }
+
+#topbar{ position:absolute; top:0; left:0; right:0; z-index:500; display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:linear-gradient(180deg, rgba(11,31,58,0.92), rgba(11,31,58,0)); pointer-events:none; }
+#topbar > *{ pointer-events:auto; }
+.brand{ font-family:var(--font-display); font-weight:600; letter-spacing:0.06em; font-size:15px; text-transform:uppercase; color:var(--cream); display:flex; align-items:center; gap:8px; }
+.brand .status-dot{ width:8px; height:8px; border-radius:50%; background:var(--teal-bright); box-shadow:0 0 8px var(--teal-bright); }
+.brand .status-dot.off{ background:var(--danger); box-shadow:0 0 8px var(--danger); }
+.role-pill{ font-family:var(--font-mono); font-size:11px; letter-spacing:0.05em; padding:5px 10px; border-radius:20px; font-weight:700; background:var(--navy-2); border:1px solid var(--line); }
+.role-pill.pro{ background:var(--orange); color:var(--navy); border-color:var(--orange); }
+.role-pill.viewer{ background:var(--navy-2); color:var(--cream); }
+.course-state{ font-family:var(--font-mono); font-size:11px; padding:5px 10px; border-radius:20px; border:1px solid var(--line); background:rgba(11,31,58,0.85); }
+.course-state.draft{ color:var(--orange); border-color:var(--orange); }
+.course-state.live{ color:var(--teal-bright); border-color:var(--teal-bright); }
+
+#winddial-wrap{ position:absolute; top:56px; right:12px; z-index:500; display:flex; flex-direction:column; align-items:center; pointer-events:auto; }
+#winddial{ width:104px; height:104px; border-radius:50%; background:radial-gradient(circle at 50% 42%, var(--navy-3), var(--navy) 72%); border:2px solid var(--line); position:relative; touch-action:none; box-shadow:0 6px 20px rgba(0,0,0,0.5); }
+#winddial .tick{ position:absolute; left:50%; top:50%; width:1px; height:46px; background:rgba(244,241,232,0.35); transform-origin:top center; }
+#winddial .tick.major{ background:rgba(244,241,232,0.7); width:2px; }
+#winddial .cardinal{ position:absolute; font-family:var(--font-mono); font-size:9px; color:var(--cream); left:50%; top:50%; transform-origin:0 0; }
+#winddial .needle{ position:absolute; left:50%; top:50%; width:3px; height:44px; background:var(--orange); transform-origin:top center; border-radius:2px; transform:translate(-50%,0) rotate(0deg); box-shadow:0 0 6px rgba(255,107,53,0.6); }
+#winddial .needle::after{ content:''; position:absolute; top:-5px; left:50%; transform:translateX(-50%); border-left:6px solid transparent; border-right:6px solid transparent; border-bottom:9px solid var(--orange); }
+#winddial .hub{ position:absolute; left:50%; top:50%; width:10px; height:10px; border-radius:50%; background:var(--cream); transform:translate(-50%,-50%); z-index:2; }
+#winddial.readonly .needle{ background:var(--teal-bright); box-shadow:0 0 6px rgba(46,196,182,0.6); }
+#winddial.readonly .needle::after{ border-bottom-color:var(--teal-bright); }
+#windreadout{ margin-top:6px; font-family:var(--font-mono); font-size:13px; font-weight:700; background:rgba(11,31,58,0.85); padding:4px 10px; border-radius:6px; border:1px solid var(--line); letter-spacing:0.03em; }
+#windreadout .lbl{ font-size:9px; color:rgba(244,241,232,0.6); display:block; text-align:center; font-family:var(--font-body); font-weight:500; letter-spacing:0.08em;}
+
+#assign-readout{ position:absolute; top:56px; left:12px; z-index:500; background:rgba(255,107,53,0.95); color:var(--navy); padding:10px 14px; border-radius:10px; max-width:230px; font-family:var(--font-body); display:none; box-shadow:0 6px 16px rgba(0,0,0,0.4); }
+#assign-readout.show{ display:block; }
+#assign-readout .tag{ font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; opacity:0.75; }
+#assign-readout .name{ font-family:var(--font-display); font-size:17px; font-weight:600; margin:2px 0 4px; }
+#assign-readout .stats{ font-family:var(--font-mono); font-size:13px; font-weight:700; }
+
+/* viewer legend card, shown instead of full sheet controls */
+#viewerCard{ position:absolute; left:12px; bottom:12px; z-index:500; background:rgba(18,48,87,0.94); border:1px solid var(--line); border-radius:12px; padding:12px 14px; max-width:260px; box-shadow:0 6px 18px rgba(0,0,0,0.4); }
+#viewerCard select{ width:100%; margin-bottom:8px; background:var(--navy); color:var(--cream); border:1px solid var(--line); border-radius:6px; padding:7px 8px; font-family:var(--font-mono); font-size:12px; }
+#viewerCard .cname{ font-family:var(--font-display); font-size:16px; margin-bottom:2px; }
+#viewerCard .ccode{ font-family:var(--font-mono); font-size:11px; color:rgba(244,241,232,0.65); margin-bottom:8px; }
+#viewerCard .legend-row{ display:flex; align-items:center; gap:6px; font-size:12px; margin-bottom:4px; }
+#viewerCard .legend-swatch{ width:12px; height:12px; border-radius:4px; flex-shrink:0; }
+#viewerCard .badge-rs{ font-family:var(--font-mono); font-size:9px; background:var(--navy); border:1px solid var(--line); border-radius:3px; padding:0 4px; margin-left:auto; }
+
+#sheet{ position:absolute; left:0; right:0; bottom:0; z-index:600; background:var(--navy-2); border-top:1px solid var(--line); border-radius:16px 16px 0 0; box-shadow:0 -8px 24px rgba(0,0,0,0.4); max-height:80vh; display:flex; flex-direction:column; transform:translateY(calc(100% - 54px)); transition:transform 0.25s ease; }
+#sheet.open{ transform:translateY(0); }
+#sheet-handle{ display:flex; flex-direction:column; align-items:center; justify-content:center; padding:10px 0 6px; cursor:pointer; flex-shrink:0; }
+#sheet-handle .bar{ width:38px; height:4px; border-radius:2px; background:rgba(244,241,232,0.3); margin-bottom:8px; }
+#sheet-handle .title{ font-family:var(--font-display); font-size:14px; letter-spacing:0.05em; text-transform:uppercase; }
+#tabs{ display:flex; gap:0; padding:0 12px; border-bottom:1px solid var(--line); flex-shrink:0; }
+.tab{ font-family:var(--font-display); font-size:13px; letter-spacing:0.04em; text-transform:uppercase; padding:10px 14px; color:rgba(244,241,232,0.55); border-bottom:2px solid transparent; cursor:pointer; }
+.tab.active{ color:var(--cream); border-bottom-color:var(--orange); }
+#panels{ overflow-y:auto; padding:14px 16px 28px; flex:1; }
+.panel{ display:none; }
+.panel.active{ display:block; }
+
+.field{ margin-bottom:14px; }
+.field label{ display:block; font-family:var(--font-mono); font-size:10px; letter-spacing:0.07em; text-transform:uppercase; color:rgba(244,241,232,0.55); margin-bottom:5px; }
+.field input[type=number], .field input[type=text], .field select{ width:100%; background:var(--navy); border:1px solid var(--line); color:var(--cream); padding:10px 12px; border-radius:8px; font-family:var(--font-mono); font-size:14px; }
+.row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+.btn{ font-family:var(--font-display); letter-spacing:0.04em; text-transform:uppercase; border:none; border-radius:8px; padding:12px 16px; font-size:13px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.btn-primary{ background:var(--orange); color:var(--navy); }
+.btn-publish{ background:var(--teal-bright); color:var(--navy); }
+.btn-ghost{ background:transparent; color:var(--cream); border:1px solid var(--line); }
+.btn-danger{ background:transparent; color:var(--danger); border:1px solid var(--danger); }
+.btn-block{ width:100%; margin-bottom:8px; }
+.btn-sm{ padding:7px 10px; font-size:11px; }
+.btn:disabled{ opacity:0.4; }
+.hint{ font-size:12px; color:rgba(244,241,232,0.5); line-height:1.5; margin-top:2px;}
+.divider{ height:1px; background:var(--line); margin:16px 0; }
+.section-title{ font-family:var(--font-display); font-size:14px; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; }
+
+.fleet-chip{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:20px; border:1px solid var(--line); font-family:var(--font-mono); font-size:11px; cursor:pointer; margin:0 6px 6px 0; background:var(--navy); }
+.fleet-chip.active{ border-color:var(--cream); background:var(--navy-3); }
+.fleet-chip .dot{ width:9px; height:9px; border-radius:50%; }
+
+.mark-row{ display:flex; align-items:center; gap:8px; padding:10px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; background:var(--navy); }
+.mark-swatch{ width:14px; height:14px; border-radius:4px; flex-shrink:0; }
+.mark-info{ flex:1; min-width:0; }
+.mark-info .name-edit{ font-family:var(--font-display); font-size:14px; background:transparent; border:none; color:var(--cream); border-bottom:1px dashed var(--line); width:100%; padding:1px 0; }
+.mark-info .name-static{ font-family:var(--font-display); font-size:14px; }
+.mark-info .coords{ font-family:var(--font-mono); font-size:10px; color:rgba(244,241,232,0.5); }
+.mark-actions{ display:flex; gap:6px; flex-shrink:0; }
+.icon-btn{ min-width:28px; height:28px; padding:0 6px; border-radius:6px; border:1px solid var(--line); background:var(--navy-2); color:var(--cream); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; font-family:var(--font-mono); font-weight:700; }
+.icon-btn.locked{ background:var(--orange); border-color:var(--orange); color:var(--navy); }
+.icon-btn.assigned{ background:var(--teal-bright); border-color:var(--teal-bright); color:var(--navy); }
+.icon-btn.rounding-P{ background:#4EA1D3; border-color:#4EA1D3; color:var(--navy); }
+.icon-btn.rounding-S{ background:#F2D543; border-color:#F2D543; color:var(--navy); }
+
+.boat-row{ display:flex; align-items:center; gap:10px; padding:9px 10px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; }
+.boat-dot{ width:10px; height:10px; border-radius:50%; background:var(--teal-bright); flex-shrink:0; }
+.boat-dot.pro{ background:var(--orange); }
+.boat-name{ flex:1; font-size:13px; }
+.boat-assign select{ font-size:11px; padding:5px 6px; background:var(--navy); color:var(--cream); border:1px solid var(--line); border-radius:6px; font-family:var(--font-mono); }
+
+.stat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+.stat-box{ background:var(--navy); border:1px solid var(--line); border-radius:8px; padding:10px; }
+.stat-box .k{ font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:0.06em; color:rgba(244,241,232,0.5); }
+.stat-box .v{ font-family:var(--font-mono); font-size:15px; font-weight:700; margin-top:2px; }
+
+.modal-overlay{ position:fixed; inset:0; background:rgba(11,31,58,0.9); z-index:2000; display:flex; align-items:center; justify-content:center; padding:20px; }
+.modal{ background:var(--navy-2); border:1px solid var(--line); border-radius:14px; padding:22px; max-width:340px; width:100%; }
+.modal h2{ font-family:var(--font-display); font-size:19px; margin:0 0 4px; text-transform:uppercase; letter-spacing:0.03em; }
+.modal p{ font-size:13px; color:rgba(244,241,232,0.65); line-height:1.5; margin:0 0 16px; }
+.toast{ position:fixed; bottom:70px; left:50%; transform:translateX(-50%); z-index:1500; background:var(--cream); color:var(--ink); padding:10px 16px; border-radius:8px; font-size:13px; font-weight:500; box-shadow:0 6px 18px rgba(0,0,0,0.4); display:flex; align-items:center; gap:10px; max-width:88vw; }
+
+.rc-mark-icon{ display:flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-weight:700; font-size:10px; color:var(--navy); border-radius:50%; border:2px solid var(--navy); box-shadow:0 2px 6px rgba(0,0,0,0.5); position:relative; }
+.rc-mark-rs{ position:absolute; bottom:-6px; right:-6px; width:14px; height:14px; border-radius:50%; font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:700; border:1px solid var(--navy); font-family:var(--font-mono); }
+.rc-boat-icon{ display:flex; align-items:center; justify-content:center; }
+.rc-boat-label{ font-family:var(--font-mono); font-size:10px; color:var(--cream); text-shadow:0 0 3px #000, 0 0 3px #000; white-space:nowrap; font-weight:700; }
+
+@media (min-width:640px){
+  #sheet{ left:auto; right:0; width:400px; border-radius:16px 0 0 0; max-height:100vh; top:0; bottom:0; transform:translateX(calc(100% - 54px)); }
+  #sheet.open{ transform:translateX(0); }
+  #sheet-handle{ flex-direction:row; justify-content:flex-start; padding:14px; }
+  #sheet-handle .bar{ display:none; }
+}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <div class="brand"><span class="status-dot off" id="connDot"></span>RACEMASTER</div>
+  <div style="display:flex; gap:8px;">
+    <span class="course-state draft" id="courseStatePill">—</span>
+    <span class="role-pill viewer" id="rolePill">VIEWER</span>
+  </div>
+</div>
+
+<div id="winddial-wrap">
+  <div id="winddial"><div class="hub"></div><div class="needle" id="windNeedle"></div></div>
+  <div id="windreadout"><span class="lbl">WIND FROM</span><span id="windVal">—</span></div>
+</div>
+
+<div id="assign-readout">
+  <div class="tag" id="assignTag">YOUR MARK</div>
+  <div class="name" id="assignName">—</div>
+  <div class="stats" id="assignStats">— m @ —°</div>
+</div>
+
+<!-- Compact card for non-PRO viewers -->
+<div id="viewerCard" style="display:none;">
+  <select id="viewerFleetSelect" onchange="onViewerFleetChange()"><option value="">No fleets published yet</option></select>
+  <div class="cname" id="viewerCourseName">—</div>
+  <div class="ccode" id="viewerCourseCode">—</div>
+  <div id="viewerLegend"></div>
+  <div class="divider" style="margin:10px 0;"></div>
+  <div class="row2">
+    <input type="text" id="viewerNameInput" placeholder="Your boat name" style="font-size:12px; padding:8px;">
+    <button class="btn btn-ghost btn-sm" onclick="saveViewerName()">Save</button>
+  </div>
+  <button class="btn btn-ghost btn-block btn-sm" style="margin-top:8px;" onclick="claimProPrompt()">Login as PRO</button>
+</div>
+
+<div class="toast" id="toast" style="display:none;"></div>
+
+<div class="modal-overlay" id="nameModalOverlay" style="display:none;">
+  <div class="modal">
+    <h2>Welcome aboard</h2>
+    <p>Enter your boat or crew name. You'll show up on the map for everyone else connected.</p>
+    <div class="field"><input type="text" id="nameModalInput" placeholder="e.g. Windswept"></div>
+    <button class="btn btn-primary btn-block" onclick="confirmNameModal()">Continue</button>
+  </div>
+</div>
+
+<div id="sheet">
+  <div id="sheet-handle" onclick="toggleSheet()">
+    <div class="bar"></div>
+    <div class="title">Course Controls</div>
+  </div>
+  <div id="tabs">
+    <div class="tab active" data-tab="course">Course</div>
+    <div class="tab" data-tab="marks">Marks</div>
+    <div class="tab" data-tab="boats">Boats</div>
+    <div class="tab" data-tab="me">Me</div>
+  </div>
+  <div id="panels">
+
+    <!-- COURSE TAB -->
+    <div class="panel active" id="panel-course">
+      <div class="section-title">Fleet<button class="btn btn-ghost btn-sm" onclick="newFleetPrompt()">+ New</button></div>
+      <div id="fleetChips" style="margin-bottom:14px;"></div>
+
+      <div class="section-title">Reference point (RC / signal boat)<span></span></div>
+      <div class="hint" style="margin-bottom:8px;">Shared by every fleet — one committee boat, one wind reading.</div>
+      <div class="row2" style="margin-bottom:14px;">
+        <button class="btn btn-ghost btn-sm" onclick="setRefFromGPS()">Use my GPS</button>
+        <button class="btn btn-ghost btn-sm" onclick="armRefTap()">Tap on map</button>
+      </div>
+      <div class="hint" id="refCoordsHint" style="margin-bottom:14px;">Not set yet.</div>
+
+      <div class="divider"></div>
+      <div class="section-title">This fleet's course</div>
+      <div class="field"><label>Course name</label><input type="text" id="f_name" placeholder="e.g. Course A" oninput="onFleetFieldChange()"></div>
+      <div class="row2">
+        <div class="field"><label>Course type</label>
+          <select id="courseType" onchange="onCourseTypeChange()">
+            <option value="wl">Windward – Leeward</option>
+            <option value="wl-offset">Windward – Leeward (offset)</option>
+            <option value="triangle">Triangle</option>
+            <option value="trapezoid">Trapezoid (Olympic)</option>
+            <option value="custom">Custom (fully freeform)</option>
+          </select>
+        </div>
+        <div class="field"><label>Laps</label><input type="number" id="f_laps" value="1" min="1" oninput="onFleetFieldChange()"></div>
+      </div>
+      <div class="field"><label>Default rounding (new marks)</label>
+        <select id="f_roundingDefault" onchange="onFleetFieldChange()">
+          <option value="P">Port (leave to port)</option>
+          <option value="S">Starboard (leave to starboard)</option>
+        </select>
+      </div>
+
+      <div class="section-title">Parameters</div>
+      <div class="row2">
+        <div class="field"><label>Weather leg (m)</label><input type="number" id="p_weatherLeg" value="800" oninput="onFleetFieldChange()"></div>
+        <div class="field"><label>Start line (m)</label><input type="number" id="p_startLine" value="80" oninput="onFleetFieldChange()"></div>
+      </div>
+      <div class="row2" id="paramsGate">
+        <div class="field"><label>Gate width (m)</label><input type="number" id="p_gateWidth" value="30" oninput="onFleetFieldChange()"></div>
+        <div class="field"><label>Gate offset (m)</label><input type="number" id="p_gateOffset" value="60" oninput="onFleetFieldChange()"></div>
+      </div>
+      <div class="row2" id="paramsReach">
+        <div class="field"><label>Reach leg (m)</label><input type="number" id="p_reachLeg" value="500" oninput="onFleetFieldChange()"></div>
+        <div class="field"><label>Apex angle (°)</label><input type="number" id="p_reachAngle" value="150" oninput="onFleetFieldChange()"></div>
+      </div>
+      <div class="row2" id="paramsOffset">
+        <div class="field"><label>Offset dist (m)</label><input type="number" id="p_offsetDist" value="120" oninput="onFleetFieldChange()"></div>
+        <div class="field"><label>Offset angle (°)</label><input type="number" id="p_offsetAngle" value="90" oninput="onFleetFieldChange()"></div>
+      </div>
+      <div id="addCustomMarkWrap" style="display:none;">
+        <button class="btn btn-ghost btn-block" onclick="armCustomMarkTap()">+ Add custom mark (tap map)</button>
+      </div>
+      <div class="hint" style="margin-bottom:10px;">Drag the wind dial to rotate this fleet's whole course — including custom marks — around the signal boat. Locked marks stay put.</div>
+
+      <div class="divider"></div>
+      <div class="section-title">Finish line</div>
+      <div class="field"><label>Finish placement</label>
+        <select id="f_finishMode" onchange="onFinishModeChange()">
+          <option value="same_as_start">Same as start line</option>
+          <option value="at_mark">At a specific mark</option>
+          <option value="custom">Custom (place freely)</option>
+        </select>
+      </div>
+      <div id="finishAtMarkWrap" style="display:none;">
+        <div class="row2">
+          <div class="field"><label>Mark</label><select id="f_finishMarkId" onchange="onFleetFieldChange()"></select></div>
+          <div class="field"><label>Line length (m)</label><input type="number" id="f_finishLineLength" value="80" oninput="onFleetFieldChange()"></div>
+        </div>
+      </div>
+      <div id="finishCustomWrap" style="display:none;">
+        <button class="btn btn-ghost btn-block" onclick="armFinishCustomTap()">Place finish line (tap boat end, then pin end)</button>
+      </div>
+
+      <div class="divider"></div>
+      <button class="btn btn-publish btn-block" onclick="publishFleet()">Publish this fleet's course</button>
+      <button class="btn btn-ghost btn-block" onclick="publishAllFleets()">Publish all fleets</button>
+      <button class="btn btn-danger btn-block" onclick="deleteFleet()">Delete this fleet</button>
+      <div class="divider"></div>
+
+      <div class="section-title">Save as template</div>
+      <div class="row2">
+        <input type="text" id="templateName" placeholder="e.g. CBYC Tuesday W/L" style="grid-column:1/2;">
+        <button class="btn btn-ghost btn-sm" onclick="saveTemplate()">Save</button>
+      </div>
+      <div id="templateList" style="margin-top:10px;"></div>
+
+      <div class="divider"></div>
+      <div class="section-title">Course stats</div>
+      <div class="stat-grid" id="courseStats"></div>
+      <div class="row2">
+        <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportGPX()">Export GPX</button>
+      </div>
+    </div>
+
+    <!-- MARKS TAB -->
+    <div class="panel" id="panel-marks">
+      <div class="section-title">Marks — <span id="marksFleetLabel">—</span></div>
+      <div id="marksList"></div>
+    </div>
+
+    <!-- BOATS TAB -->
+    <div class="panel" id="panel-boats">
+      <div class="section-title">On the water</div>
+      <div id="boatsList"></div>
+    </div>
+
+    <!-- ME TAB -->
+    <div class="panel" id="panel-me">
+      <div class="section-title">Your identity</div>
+      <div class="field"><label>Boat / name</label><input type="text" id="myName" placeholder="e.g. Windswept"></div>
+      <button class="btn btn-primary btn-block" onclick="saveMyName()">Save name</button>
+      <div class="divider"></div>
+      <div class="hint" id="myRoleHint"></div>
+      <button class="btn btn-ghost btn-block" id="loginProBtn" style="margin-top:10px;" onclick="claimProPrompt()">Claim PRO role</button>
+      <button class="btn btn-danger btn-block" id="releaseProBtn" style="display:none; margin-top:10px;" onclick="releasePro()">Log out of PRO</button>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<script>
+/* ============ FIREBASE ============ */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA-X0BlIjxCKRNJ2wvsu6HSRG6jSnWUBTE",
+  authDomain: "racemaster-5e0e5.firebaseapp.com",
+  databaseURL: "https://racemaster-5e0e5-default-rtdb.firebaseio.com",
+  projectId: "racemaster-5e0e5",
+  storageBucket: "racemaster-5e0e5.firebasestorage.app",
+  messagingSenderId: "453600911655",
+  appId: "1:453600911655:web:dba4ce93d113e0e2c0c902",
+};
+let fbReady = false, db = null;
+try{ firebase.initializeApp(FIREBASE_CONFIG); db = firebase.database(); fbReady = true; }
+catch(e){ console.error("Firebase init failed", e); }
+
+/* ============ GEO HELPERS ============ */
+function toRad(d){ return d*Math.PI/180; }
+function toDeg(r){ return r*180/Math.PI; }
+function haversineMeters(lat1,lon1,lat2,lon2){
+  const R=6371000, dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+function bearingDeg(lat1,lon1,lat2,lon2){
+  const y=Math.sin(toRad(lon2-lon1))*Math.cos(toRad(lat2));
+  const x=Math.cos(toRad(lat1))*Math.sin(toRad(lat2)) - Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(toRad(lon2-lon1));
+  return (toDeg(Math.atan2(y,x))+360)%360;
+}
+function destPoint(lat,lon,bearing,distM){
+  const R=6371000, br=toRad(bearing), lat1=toRad(lat), lon1=toRad(lon);
+  const lat2=Math.asin(Math.sin(lat1)*Math.cos(distM/R)+Math.cos(lat1)*Math.sin(distM/R)*Math.cos(br));
+  const lon2=lon1+Math.atan2(Math.sin(br)*Math.sin(distM/R)*Math.cos(lat1), Math.cos(distM/R)-Math.sin(lat1)*Math.sin(lat2));
+  return {lat:toDeg(lat2), lon:toDeg(lon2)};
+}
+function norm360(d){ return ((d%360)+360)%360; }
+function uid(pfx){ return (pfx||'m')+'_'+Math.random().toString(36).slice(2,10); }
+
+/* ============ ROLE LOGIN — same pattern as Finish Line ============ */
+const PRO_PASSWORD = "1777";
+
+/* ============ CONSTANTS ============ */
+const MARK_META = {
+  signal:  {label:'Signal Boat', color:'#FF6B35', order:0, roundable:false},
+  pin:     {label:'Pin', color:'#F4F1E8', order:1, roundable:false},
+  weather: {label:'Weather Mark', color:'#F2D543', order:2, roundable:true},
+  offset:  {label:'Offset', color:'#F2D543', order:3, roundable:true},
+  wing:    {label:'Wing Mark', color:'#2EC4B6', order:3, roundable:true},
+  wingL:   {label:'Wing (Left)', color:'#2EC4B6', order:3, roundable:true},
+  wingR:   {label:'Wing (Right)', color:'#2EC4B6', order:4, roundable:true},
+  gateL:   {label:'Gate (Left)', color:'#FF6B35', order:5, roundable:true},
+  gateR:   {label:'Gate (Right)', color:'#FF6B35', order:6, roundable:true},
+  leeward: {label:'Leeward Mark', color:'#FF6B35', order:5, roundable:true},
+  custom:  {label:'Mark', color:'#B98BD9', order:9, roundable:true},
+  finishA: {label:'Finish (Boat)', color:'#4EA1D3', order:20, roundable:false},
+  finishB: {label:'Finish (Pin)', color:'#4EA1D3', order:21, roundable:false},
+};
+const FLEET_COLORS = ['#FF6B35','#2EC4B6','#F2D543','#B98BD9','#4EA1D3','#E85D75'];
+
+function defaultParams(){
+  return { windDir:0, weatherLeg:800, startLine:80, gateWidth:30, gateOffset:60, reachLeg:500, reachAngle:150, offsetDist:120, offsetAngle:90 };
+}
+function blankFleet(name, color){
+  return {
+    id: uid('fleet'), name: name||'Fleet A', color: color||FLEET_COLORS[0],
+    courseType:'wl', laps:1, roundingDefault:'P',
+    params: defaultParams(),
+    finish: {mode:'same_as_start', markId:null, lineLength:80},
+    marks: [], updatedAt: 0,
+  };
+}
+
+/* ============ STATE ============ */
+let sessionId = localStorage.getItem('rc_sessionId');
+if(!sessionId){ sessionId = 'u_'+Math.random().toString(36).slice(2,12); localStorage.setItem('rc_sessionId', sessionId); }
+let myName = localStorage.getItem('rc_name') || '';
+let isPro = false;
+
+let sharedDraft = {ref:null, windDir:0};   // shared committee boat + wind, PRO-editable
+let fleetsDraft = {};                        // fleetId -> fleet course object (draft)
+let liveFleets = {};                         // fleetId -> published fleet course (frozen ref/wind/marks)
+let users = {};
+let selectedFleetId = null;   // which fleet PRO is editing
+let viewerFleetId = null;     // which fleet a viewer is displaying
+
+let refTapArmed = false;
+let customMarkTapArmed = false;
+let finishTapStage = null; // null | 'A' | 'B'
+let watchId = null;
+
+/* ============ MAP ============ */
+const map = L.map('map', {zoomControl:false, attributionControl:false}).setView([33.7395, -118.2923], 14);
+L.control.zoom({position:'bottomleft'}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);
+L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {maxZoom:18, opacity:0.9}).addTo(map);
+
+const markLayer = L.layerGroup().addTo(map);
+const lineLayer = L.layerGroup().addTo(map);
+const boatLayer = L.layerGroup().addTo(map);
+const assignLineLayer = L.layerGroup().addTo(map);
+let haveCenteredOnce = false;
+
+function markDivIcon(type, label, locked, assigned, rounding){
+  const meta = MARK_META[type] || MARK_META.custom;
+  const border = locked ? '#FF6B35' : '#0B1F3A';
+  const ring = assigned ? 'box-shadow:0 0 0 3px rgba(46,196,182,0.7), 0 2px 6px rgba(0,0,0,0.5);' : '';
+  const rsBadge = (meta.roundable && rounding) ? `<div class="rc-mark-rs" style="background:${rounding==='P'?'#4EA1D3':'#F2D543'};">${rounding}</div>` : '';
+  return L.divIcon({
+    className:'',
+    html:`<div class="rc-mark-icon" style="width:26px;height:26px;background:${meta.color};border-color:${border};${ring}">${(label||'').slice(0,2).toUpperCase()}${rsBadge}</div>`,
+    iconSize:[26,26], iconAnchor:[13,13]
+  });
+}
+function boatDivIcon(heading, colorIsPro, name){
+  const hdg = (typeof heading==='number' && !isNaN(heading)) ? heading : 0;
+  const color = colorIsPro ? '#FF6B35' : '#2EC4B6';
+  return L.divIcon({
+    className:'',
+    html:`<div style="display:flex;flex-direction:column;align-items:center;">
+      <svg width="26" height="26" viewBox="0 0 26 26" style="transform:rotate(${hdg}deg);">
+        <polygon points="13,2 20,22 13,17 6,22" fill="${color}" stroke="#0B1F3A" stroke-width="1.5"/>
+      </svg>
+      <div class="rc-boat-label">${(name||'boat')}</div></div>`,
+    iconSize:[60,40], iconAnchor:[13,13]
+  });
+}
+
+/* ============ COURSE GENERATION ============
+   Template marks are recomputed each regen straight from params (already
+   wind-relative). Custom / finish-custom marks are stored with a polar
+   offset (distFromRef, bearingOffsetFromWind) captured at placement time,
+   so they rotate rigidly with the wind dial around the reference point —
+   unless locked, in which case they stay at an absolute lat/lon. */
+function polarOffsetFor(ref, windDir, lat, lon){
+  return {
+    distFromRef: haversineMeters(ref.lat, ref.lon, lat, lon),
+    bearingOffsetFromWind: norm360(bearingDeg(ref.lat, ref.lon, lat, lon) - windDir),
+  };
+}
+function posFromPolarOffset(ref, windDir, distFromRef, bearingOffsetFromWind){
+  return destPoint(ref.lat, ref.lon, norm360(windDir + bearingOffsetFromWind), distFromRef);
+}
+
+function generateFleetMarks(fleet, ref, windDir){
+  if(!ref) return [];
+  const existingById = {};
+  (fleet.marks||[]).forEach(m=>{ existingById[m.id]=m; });
+  const out = [];
+  const rDefault = fleet.roundingDefault || 'P';
+
+  function put(id, type, lat, lon, labelOverride){
+    const prev = existingById[id];
+    const meta = MARK_META[type] || MARK_META.custom;
+    if(prev && prev.locked){
+      out.push(prev); return;
+    }
+    out.push({
+      id, type,
+      label: (prev && prev.label) ? prev.label : (labelOverride || meta.label),
+      lat, lon, color: meta.color,
+      locked: prev ? !!prev.locked : false,
+      rounding: prev ? (prev.rounding||rDefault) : rDefault,
+      order: meta.order,
+    });
+  }
+  function putPolar(id, type, distFromRef, bearingOffsetFromWind, labelOverride){
+    const prev = existingById[id];
+    const meta = MARK_META[type] || MARK_META.custom;
+    if(prev && prev.locked){ out.push(prev); return; }
+    const pos = posFromPolarOffset(ref, windDir, distFromRef, bearingOffsetFromWind);
+    out.push({
+      id, type,
+      label: (prev && prev.label) ? prev.label : (labelOverride || meta.label),
+      lat:pos.lat, lon:pos.lon, color: meta.color,
+      locked: prev ? !!prev.locked : false,
+      rounding: prev ? (prev.rounding||rDefault) : rDefault,
+      order: meta.order,
+      distFromRef, bearingOffsetFromWind,
+    });
+  }
+
+  const p = fleet.params;
+  const wd = norm360(windDir);
+  const signal = ref;
+  const pin = destPoint(signal.lat, signal.lon, norm360(wd+90), p.startLine);
+  put('signal','signal', signal.lat, signal.lon);
+  put('pin','pin', pin.lat, pin.lon);
+
+  const weather = destPoint(signal.lat, signal.lon, wd, p.weatherLeg);
+
+  if(fleet.courseType === 'wl'){
+    put('weather','weather', weather.lat, weather.lon);
+    const gc = destPoint(signal.lat, signal.lon, norm360(wd+180), p.gateOffset);
+    const gL = destPoint(gc.lat, gc.lon, norm360(wd+90), p.gateWidth/2);
+    const gR = destPoint(gc.lat, gc.lon, norm360(wd-90), p.gateWidth/2);
+    put('gateL','gateL', gL.lat, gL.lon);
+    put('gateR','gateR', gR.lat, gR.lon);
+  } else if(fleet.courseType === 'wl-offset'){
+    put('weather','weather', weather.lat, weather.lon);
+    const off = destPoint(weather.lat, weather.lon, norm360(wd+p.offsetAngle), p.offsetDist);
+    put('offset','offset', off.lat, off.lon);
+    const gc = destPoint(signal.lat, signal.lon, norm360(wd+180), p.gateOffset);
+    const gL = destPoint(gc.lat, gc.lon, norm360(wd+90), p.gateWidth/2);
+    const gR = destPoint(gc.lat, gc.lon, norm360(wd-90), p.gateWidth/2);
+    put('gateL','gateL', gL.lat, gL.lon);
+    put('gateR','gateR', gR.lat, gR.lon);
+  } else if(fleet.courseType === 'triangle'){
+    put('weather','weather', weather.lat, weather.lon);
+    const wing = destPoint(weather.lat, weather.lon, norm360(wd+180+p.reachAngle), p.reachLeg);
+    put('wing','wing', wing.lat, wing.lon);
+    const leeward = destPoint(signal.lat, signal.lon, norm360(wd+180), p.gateOffset);
+    put('leeward','leeward', leeward.lat, leeward.lon);
+  } else if(fleet.courseType === 'trapezoid'){
+    put('weather','weather', weather.lat, weather.lon);
+    const wingL = destPoint(weather.lat, weather.lon, norm360(wd+180-p.reachAngle/2), p.reachLeg);
+    const wingR = destPoint(weather.lat, weather.lon, norm360(wd+180+p.reachAngle/2), p.reachLeg);
+    put('wingL','wingL', wingL.lat, wingL.lon);
+    put('wingR','wingR', wingR.lat, wingR.lon);
+    const gc = destPoint(signal.lat, signal.lon, norm360(wd+180), p.gateOffset);
+    const gL = destPoint(gc.lat, gc.lon, norm360(wd+90), p.gateWidth/2);
+    const gR = destPoint(gc.lat, gc.lon, norm360(wd-90), p.gateWidth/2);
+    put('gateL','gateL', gL.lat, gL.lon);
+    put('gateR','gateR', gR.lat, gR.lon);
+  }
+  // custom-type marks (courseType 'custom') and any ad-hoc custom marks added
+  // within a template course both live here, rotating via polar offset.
+  Object.values(existingById).forEach(m=>{
+    if(m.type==='custom' && !out.find(o=>o.id===m.id)){
+      if(m.locked){ out.push(m); }
+      else if(typeof m.distFromRef==='number'){ putPolar(m.id, 'custom', m.distFromRef, m.bearingOffsetFromWind, m.label); }
+      else { out.push(m); }
+    }
+  });
+
+  // finish line
+  const finish = fleet.finish || {mode:'same_as_start'};
+  if(finish.mode === 'at_mark' && finish.markId){
+    const target = out.find(m=>m.id===finish.markId);
+    if(target){
+      const len = finish.lineLength || 80;
+      const fa = destPoint(target.lat, target.lon, norm360(wd+90), len/2);
+      const fb = destPoint(target.lat, target.lon, norm360(wd-90), len/2);
+      put('finishA','finishA', fa.lat, fa.lon);
+      put('finishB','finishB', fb.lat, fb.lon);
+    }
+  } else if(finish.mode === 'custom'){
+    ['finishA','finishB'].forEach(id=>{
+      const m = existingById[id];
+      if(m){
+        if(m.locked){ out.push(m); }
+        else if(typeof m.distFromRef==='number'){ putPolar(id, id, m.distFromRef, m.bearingOffsetFromWind); }
+      }
+    });
+  }
+  // mode 'same_as_start' needs no extra marks — start line doubles as finish
+
+  return out;
+}
+
+function fleetCodeString(f){
+  const typeAbbrev = {wl:'W/L', 'wl-offset':'W/L+Offset', triangle:'Triangle', trapezoid:'Trapezoid', custom:'Custom'}[f.courseType]||f.courseType;
+  let finishDesc = 'Finish @ Start';
+  if(f.finish){
+    if(f.finish.mode==='at_mark'){
+      const meta = MARK_META[f.finish.markId];
+      finishDesc = 'Finish @ ' + (meta ? meta.label : (f.finish.markId||'mark'));
+    } else if(f.finish.mode==='custom'){
+      finishDesc = 'Finish (custom)';
+    }
+  }
+  return `${typeAbbrev} \u00D7${f.laps||1} lap${(f.laps||1)>1?'s':''} \u2022 ${finishDesc}`;
+}
+
+function regenFleet(fleetId, pushToFirebase){
+  const f = fleetsDraft[fleetId];
+  if(!f || !sharedDraft.ref) return;
+  f.marks = generateFleetMarks(f, sharedDraft.ref, sharedDraft.windDir);
+  f.updatedAt = Date.now();
+  if(pushToFirebase!==false) saveDraftToFirebase(fleetId);
+}
+function regenAllFleets(pushToFirebase){
+  Object.keys(fleetsDraft).forEach(fid=>regenFleet(fid, false));
+  if(pushToFirebase!==false) saveAllDraftToFirebase();
+}
+
+function onFleetFieldChange(){
+  if(!isPro || !selectedFleetId) return;
+  const f = fleetsDraft[selectedFleetId];
+  if(!f) return;
+  f.name = document.getElementById('f_name').value || f.name;
+  f.laps = Math.max(1, Number(document.getElementById('f_laps').value)||1);
+  f.roundingDefault = document.getElementById('f_roundingDefault').value;
+  f.courseType = document.getElementById('courseType').value;
+  f.params.weatherLeg = Number(document.getElementById('p_weatherLeg').value)||0;
+  f.params.startLine  = Number(document.getElementById('p_startLine').value)||0;
+  f.params.gateWidth  = Number(document.getElementById('p_gateWidth').value)||0;
+  f.params.gateOffset = Number(document.getElementById('p_gateOffset').value)||0;
+  f.params.reachLeg   = Number(document.getElementById('p_reachLeg').value)||0;
+  f.params.reachAngle = Number(document.getElementById('p_reachAngle').value)||0;
+  f.params.offsetDist = Number(document.getElementById('p_offsetDist').value)||0;
+  f.params.offsetAngle= Number(document.getElementById('p_offsetAngle').value)||0;
+  f.finish = f.finish || {mode:'same_as_start'};
+  f.finish.mode = document.getElementById('f_finishMode').value;
+  f.finish.markId = document.getElementById('f_finishMarkId').value || null;
+  f.finish.lineLength = Number(document.getElementById('f_finishLineLength').value)||80;
+  regenFleet(selectedFleetId);
+  populateFinishMarkOptions();
+  renderAll();
+}
+
+function onCourseTypeChange(){
+  const ct = document.getElementById('courseType').value;
+  document.getElementById('paramsGate').style.display = (ct==='wl'||ct==='wl-offset'||ct==='trapezoid') ? 'grid':'none';
+  document.getElementById('paramsReach').style.display = (ct==='triangle'||ct==='trapezoid') ? 'grid':'none';
+  document.getElementById('paramsOffset').style.display = (ct==='wl-offset') ? 'grid':'none';
+  document.getElementById('addCustomMarkWrap').style.display = (ct==='custom' || true) ? 'block':'none'; // always allow ad-hoc marks
+  onFleetFieldChange();
+}
+function onFinishModeChange(){
+  const mode = document.getElementById('f_finishMode').value;
+  document.getElementById('finishAtMarkWrap').style.display = mode==='at_mark' ? 'block':'none';
+  document.getElementById('finishCustomWrap').style.display = mode==='custom' ? 'block':'none';
+  onFleetFieldChange();
+}
+function populateFinishMarkOptions(){
+  const sel = document.getElementById('f_finishMarkId');
+  const f = fleetsDraft[selectedFleetId];
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— choose —</option>';
+  if(!f) return;
+  f.marks.filter(m=>MARK_META[m.type] && MARK_META[m.type].roundable).forEach(m=>{
+    const opt = document.createElement('option');
+    opt.value = m.id; opt.textContent = m.label;
+    if(m.id===current || m.id===(f.finish&&f.finish.markId)) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+/* ============ WIND DIAL ============ */
+const dialEl = document.getElementById('winddial');
+const needleEl = document.getElementById('windNeedle');
+const windValEl = document.getElementById('windVal');
+(function buildTicks(){
+  for(let d=0; d<360; d+=30){
+    const t = document.createElement('div');
+    t.className = 'tick'+(d%90===0?' major':'');
+    t.style.transform = `translate(-50%,0) rotate(${d}deg)`;
+    dialEl.appendChild(t);
+  }
+  [[0,'N'],[90,'E'],[180,'S'],[270,'W']].forEach(([d,txt])=>{
+    const el = document.createElement('div');
+    el.className='cardinal'; el.textContent = txt;
+    const r = 40, rad = toRad(d-90);
+    el.style.left = (52 + r*Math.cos(rad)) + 'px';
+    el.style.top = (52 + r*Math.sin(rad)) + 'px';
+    el.style.transform = 'translate(-50%,-50%)';
+    dialEl.appendChild(el);
+  });
+})();
+function setNeedle(deg){ needleEl.style.transform = `translate(-50%,0) rotate(${deg}deg)`; windValEl.textContent = Math.round(norm360(deg)) + '\u00B0'; }
+let dialDragging = false;
+function dialAngleFromEvent(ev){
+  const rect = dialEl.getBoundingClientRect();
+  const cx = rect.left+rect.width/2, cy = rect.top+rect.height/2;
+  const p = ev.touches ? ev.touches[0] : ev;
+  return norm360(toDeg(Math.atan2(p.clientX-cx, -(p.clientY-cy))));
+}
+function dialStart(ev){ if(!isPro) return; dialDragging = true; ev.preventDefault(); }
+function dialMove(ev){ if(!dialDragging || !isPro) return; ev.preventDefault(); setNeedle(dialAngleFromEvent(ev)); }
+function dialEnd(ev){
+  if(!dialDragging || !isPro) return;
+  dialDragging = false;
+  const p = ev.changedTouches ? {clientX:ev.changedTouches[0].clientX, clientY:ev.changedTouches[0].clientY} : ev;
+  sharedDraft.windDir = norm360(dialAngleFromEvent(p));
+  regenAllFleets();
+  renderAll();
+}
+dialEl.addEventListener('mousedown', dialStart);
+window.addEventListener('mousemove', dialMove);
+window.addEventListener('mouseup', dialEnd);
+dialEl.addEventListener('touchstart', dialStart, {passive:false});
+window.addEventListener('touchmove', dialMove, {passive:false});
+window.addEventListener('touchend', dialEnd);
+
+/* ============ FLEET MANAGEMENT ============ */
+function newFleetPrompt(){
+  if(!isPro) return;
+  const name = prompt('Fleet name (e.g. "PHRF", "Cal-20", "Fleet A"):');
+  if(!name) return;
+  const color = FLEET_COLORS[Object.keys(fleetsDraft).length % FLEET_COLORS.length];
+  const f = blankFleet(name, color);
+  fleetsDraft[f.id] = f;
+  selectedFleetId = f.id;
+  if(sharedDraft.ref) regenFleet(f.id, false);
+  saveAllDraftToFirebase();
+  syncFormFromFleet();
+  renderAll();
+}
+function deleteFleet(){
+  if(!isPro || !selectedFleetId) return;
+  if(!confirm('Delete this fleet\'s draft course? (Published/live version is unaffected until you publish something else over it.)')) return;
+  delete fleetsDraft[selectedFleetId];
+  db.ref('courses/draft/fleets/'+selectedFleetId).remove();
+  selectedFleetId = Object.keys(fleetsDraft)[0] || null;
+  syncFormFromFleet();
+  renderAll();
+}
+function selectFleet(fleetId){
+  selectedFleetId = fleetId;
+  syncFormFromFleet();
+  renderAll();
+}
+
+/* ============ FIREBASE SYNC ============ */
+function saveSharedToFirebase(){
+  if(!fbReady || !isPro) return;
+  db.ref('courses/draft/shared').set(sharedDraft);
+}
+function saveDraftToFirebase(fleetId){
+  if(!fbReady || !isPro) return;
+  db.ref('courses/draft/fleets/'+fleetId).set(fleetsDraft[fleetId]);
+}
+function saveAllDraftToFirebase(){
+  if(!fbReady || !isPro) return;
+  saveSharedToFirebase();
+  Object.keys(fleetsDraft).forEach(fid=>db.ref('courses/draft/fleets/'+fid).set(fleetsDraft[fid]));
+}
+function publishFleet(){
+  if(!isPro || !selectedFleetId){ return; }
+  const f = fleetsDraft[selectedFleetId];
+  if(!f || !sharedDraft.ref){ showToast('Set a reference point first.'); return; }
+  const toPublish = JSON.parse(JSON.stringify(f));
+  toPublish.ref = sharedDraft.ref;
+  toPublish.windDir = sharedDraft.windDir;
+  toPublish.status = 'live';
+  toPublish.updatedAt = Date.now();
+  db.ref('courses/live/fleets/'+f.id).set(toPublish).then(()=>{
+    showToast(`"${f.name}" published — visible to viewers now.`);
+  });
+}
+function publishAllFleets(){
+  if(!isPro){ return; }
+  if(!sharedDraft.ref){ showToast('Set a reference point first.'); return; }
+  Object.values(fleetsDraft).forEach(f=>{
+    const toPublish = JSON.parse(JSON.stringify(f));
+    toPublish.ref = sharedDraft.ref;
+    toPublish.windDir = sharedDraft.windDir;
+    toPublish.status = 'live';
+    toPublish.updatedAt = Date.now();
+    db.ref('courses/live/fleets/'+f.id).set(toPublish);
+  });
+  showToast('All fleets published.');
+}
+function saveTemplate(){
+  if(!isPro || !selectedFleetId) return;
+  const f = fleetsDraft[selectedFleetId];
+  const name = document.getElementById('templateName').value.trim();
+  if(!name){ showToast('Name the template first.'); return; }
+  const tId = uid('tmpl');
+  db.ref('templates/'+tId).set({
+    name, courseType:f.courseType, laps:f.laps, roundingDefault:f.roundingDefault,
+    params:f.params, finish:f.finish,
+    // custom marks stored with polar offsets so the template rotates correctly wherever it's applied
+    customMarks: f.marks.filter(m=>m.type==='custom' && typeof m.distFromRef==='number')
+      .map(m=>({id:m.id, label:m.label, distFromRef:m.distFromRef, bearingOffsetFromWind:m.bearingOffsetFromWind, rounding:m.rounding})),
+  });
+  showToast('Template saved.');
+  document.getElementById('templateName').value='';
+}
+function loadTemplatesUI(list){
+  const el = document.getElementById('templateList');
+  el.innerHTML = '';
+  Object.entries(list||{}).forEach(([id,t])=>{
+    const row = document.createElement('div');
+    row.className='mark-row';
+    row.innerHTML = `<div class="mark-info"><div class="name-static">${t.name}</div><div class="coords">${t.courseType} \u00D7${t.laps||1}</div></div>
+      <div class="mark-actions"><button class="icon-btn" title="Apply">Use</button><button class="icon-btn" title="Delete">\u2715</button></div>`;
+    const btns = row.querySelectorAll('.icon-btn');
+    btns[0].onclick = ()=>{
+      if(!isPro || !selectedFleetId) return;
+      const f = fleetsDraft[selectedFleetId];
+      f.courseType = t.courseType; f.laps = t.laps||1; f.roundingDefault = t.roundingDefault||'P';
+      f.params = Object.assign(defaultParams(), t.params);
+      f.finish = t.finish || {mode:'same_as_start'};
+      (t.customMarks||[]).forEach(cm=>{
+        f.marks.push({id:cm.id, type:'custom', label:cm.label, lat:0, lon:0, color:MARK_META.custom.color, locked:false, rounding:cm.rounding||'P', order:9, distFromRef:cm.distFromRef, bearingOffsetFromWind:cm.bearingOffsetFromWind});
+      });
+      syncFormFromFleet();
+      regenFleet(selectedFleetId);
+      renderAll();
+      showToast('Template applied to draft.');
+    };
+    btns[1].onclick = ()=>{ db.ref('templates/'+id).remove(); };
+    el.appendChild(row);
+  });
+}
+
+/* Users / boats / presence */
+let presenceArmed = false;
+function armPresence(){
+  if(presenceArmed || !fbReady) return;
+  presenceArmed = true;
+  db.ref('users/'+sessionId).onDisconnect().remove();
+}
+function pushMyPosition(lat, lon, heading){
+  if(!fbReady) return;
+  armPresence();
+  db.ref('users/'+sessionId).update({ name: myName || 'Unnamed boat', lat, lon, heading:(typeof heading==='number'?heading:null), isPro, lastUpdate: Date.now() });
+}
+function startGeoWatch(){
+  if(!navigator.geolocation) return;
+  if(watchId) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition((pos)=>{
+    const {latitude, longitude, heading} = pos.coords;
+    pushMyPosition(latitude, longitude, heading);
+    if(!haveCenteredOnce){ map.setView([latitude,longitude], 15); haveCenteredOnce = true; }
+  }, (err)=>{ console.warn('geo error', err); }, {enableHighAccuracy:true, maximumAge:4000, timeout:15000});
+}
+
+/* PRO login/logout — password based, matches Finish Line, fresh each session */
+function claimProPrompt(){
+  const pw = prompt('Enter PRO password:');
+  if(!pw) return;
+  if(pw !== PRO_PASSWORD){ showToast('Incorrect password.'); return; }
+  becomePro();
+}
+function becomePro(){
+  isPro = true;
+  db.ref('users/'+sessionId+'/isPro').set(true);
+  Promise.all([
+    db.ref('courses/draft/shared').once('value'),
+    db.ref('courses/draft/fleets').once('value'),
+  ]).then(([sharedSnap, fleetsSnap])=>{
+    sharedDraft = sharedSnap.val() || {ref:null, windDir:0};
+    fleetsDraft = fleetsSnap.val() || {};
+    if(Object.keys(fleetsDraft).length===0){
+      const f = blankFleet('Fleet A', FLEET_COLORS[0]);
+      fleetsDraft[f.id] = f;
+    }
+    selectedFleetId = Object.keys(fleetsDraft)[0];
+    syncFormFromFleet();
+    updateRoleUI();
+    renderAll();
+  });
+  showToast('Logged in as PRO. Edit and publish when ready.');
+}
+function releasePro(){
+  if(!isPro) return;
+  isPro = false;
+  db.ref('users/'+sessionId+'/isPro').set(false);
+  fleetsDraft = {}; sharedDraft = {ref:null, windDir:0};
+  updateRoleUI();
+  renderAll();
+  showToast('Logged out of PRO.');
+}
+
+/* ============ UI WIRING ============ */
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'flex';
+  clearTimeout(showToast._h);
+  showToast._h = setTimeout(()=>{ t.style.display='none'; }, 3200);
+}
+function toggleSheet(){ document.getElementById('sheet').classList.toggle('open'); }
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
+    document.getElementById('sheet').classList.add('open');
+  });
+});
+
+function updateRoleUI(){
+  document.getElementById('rolePill').textContent = isPro ? 'PRO' : 'VIEWER';
+  document.getElementById('rolePill').className = 'role-pill '+(isPro?'pro':'viewer');
+  document.getElementById('sheet').style.display = isPro ? 'flex' : 'none';
+  document.getElementById('viewerCard').style.display = isPro ? 'none' : 'block';
+  document.getElementById('loginProBtn').style.display = isPro ? 'none':'block';
+  document.getElementById('releaseProBtn').style.display = isPro ? 'block':'none';
+  document.getElementById('myRoleHint').textContent = isPro
+    ? 'You are the PRO for this session. Edit and publish courses per fleet. Role resets if you reload.'
+    : 'You are a viewer.';
+  dialEl.style.display = isPro ? 'block' : 'none';
+  document.getElementById('winddial-wrap').style.display = isPro ? 'flex' : 'none';
+}
+
+function setRefFromGPS(){
+  if(!isPro) return;
+  navigator.geolocation.getCurrentPosition(pos=>{
+    sharedDraft.ref = {lat:pos.coords.latitude, lon:pos.coords.longitude};
+    regenAllFleets();
+    map.setView([sharedDraft.ref.lat, sharedDraft.ref.lon], 16);
+    renderAll();
+  }, ()=>showToast('Could not get GPS position.'), {enableHighAccuracy:true});
+}
+function armRefTap(){ if(!isPro) return; refTapArmed = true; showToast('Tap the map to place the signal boat / reference point.'); }
+function armCustomMarkTap(){ if(!isPro) return; customMarkTapArmed = true; showToast('Tap the map to add a custom mark.'); }
+function armFinishCustomTap(){ if(!isPro) return; finishTapStage = 'A'; showToast('Tap the map for the finish boat-end mark.'); }
+
+map.on('click', (e)=>{
+  if(!isPro) return;
+  if(refTapArmed){
+    sharedDraft.ref = {lat:e.latlng.lat, lon:e.latlng.lng};
+    refTapArmed = false;
+    regenAllFleets(); renderAll();
+    return;
+  }
+  if(customMarkTapArmed && selectedFleetId){
+    const f = fleetsDraft[selectedFleetId];
+    const off = polarOffsetFor(sharedDraft.ref, sharedDraft.windDir, e.latlng.lat, e.latlng.lng);
+    const id = uid('custom');
+    const label = prompt('Label for this mark:', 'Mark') || 'Mark';
+    f.marks.push({id, type:'custom', label, lat:e.latlng.lat, lon:e.latlng.lng, color:MARK_META.custom.color, locked:false, rounding:f.roundingDefault||'P', order:9, distFromRef:off.distFromRef, bearingOffsetFromWind:off.bearingOffsetFromWind});
+    customMarkTapArmed = false;
+    saveDraftToFirebase(selectedFleetId);
+    renderAll();
+    return;
+  }
+  if(finishTapStage && selectedFleetId){
+    const f = fleetsDraft[selectedFleetId];
+    const off = polarOffsetFor(sharedDraft.ref, sharedDraft.windDir, e.latlng.lat, e.latlng.lng);
+    if(finishTapStage==='A'){
+      f.marks = f.marks.filter(m=>m.id!=='finishA');
+      f.marks.push({id:'finishA', type:'finishA', label:MARK_META.finishA.label, lat:e.latlng.lat, lon:e.latlng.lng, color:MARK_META.finishA.color, locked:false, rounding:null, order:20, distFromRef:off.distFromRef, bearingOffsetFromWind:off.bearingOffsetFromWind});
+      finishTapStage = 'B';
+      showToast('Now tap the finish pin-end.');
+    } else {
+      f.marks = f.marks.filter(m=>m.id!=='finishB');
+      f.marks.push({id:'finishB', type:'finishB', label:MARK_META.finishB.label, lat:e.latlng.lat, lon:e.latlng.lng, color:MARK_META.finishB.color, locked:false, rounding:null, order:21, distFromRef:off.distFromRef, bearingOffsetFromWind:off.bearingOffsetFromWind});
+      finishTapStage = null;
+      saveDraftToFirebase(selectedFleetId);
+      showToast('Finish line placed.');
+    }
+    renderAll();
+    return;
+  }
+});
+
+function syncFormFromFleet(){
+  const chips = document.getElementById('fleetChips');
+  chips.innerHTML = '';
+  Object.values(fleetsDraft).forEach(f=>{
+    const chip = document.createElement('div');
+    chip.className = 'fleet-chip' + (f.id===selectedFleetId ? ' active':'');
+    chip.innerHTML = `<span class="dot" style="background:${f.color}"></span>${f.name}`;
+    chip.onclick = ()=>selectFleet(f.id);
+    chips.appendChild(chip);
+  });
+  const f = fleetsDraft[selectedFleetId];
+  document.getElementById('refCoordsHint').textContent = sharedDraft.ref
+    ? `Set at ${sharedDraft.ref.lat.toFixed(5)}, ${sharedDraft.ref.lon.toFixed(5)}`
+    : 'Not set yet.';
+  setNeedle(sharedDraft.windDir||0);
+  if(!f) return;
+  document.getElementById('f_name').value = f.name;
+  document.getElementById('f_laps').value = f.laps;
+  document.getElementById('f_roundingDefault').value = f.roundingDefault;
+  document.getElementById('courseType').value = f.courseType;
+  document.getElementById('p_weatherLeg').value = f.params.weatherLeg;
+  document.getElementById('p_startLine').value = f.params.startLine;
+  document.getElementById('p_gateWidth').value = f.params.gateWidth;
+  document.getElementById('p_gateOffset').value = f.params.gateOffset;
+  document.getElementById('p_reachLeg').value = f.params.reachLeg;
+  document.getElementById('p_reachAngle').value = f.params.reachAngle;
+  document.getElementById('p_offsetDist').value = f.params.offsetDist;
+  document.getElementById('p_offsetAngle').value = f.params.offsetAngle;
+  document.getElementById('f_finishMode').value = (f.finish&&f.finish.mode)||'same_as_start';
+  document.getElementById('f_finishLineLength').value = (f.finish&&f.finish.lineLength)||80;
+  onCourseTypeChange();
+  onFinishModeChange();
+  populateFinishMarkOptions();
+}
+
+function showNameModal(){ document.getElementById('nameModalInput').value = myName || ''; document.getElementById('nameModalOverlay').style.display = 'flex'; }
+function confirmNameModal(){
+  const val = document.getElementById('nameModalInput').value.trim();
+  myName = val || 'Unnamed boat';
+  localStorage.setItem('rc_name', myName);
+  document.getElementById('myName').value = myName;
+  document.getElementById('viewerNameInput').value = myName;
+  document.getElementById('nameModalOverlay').style.display = 'none';
+}
+function saveMyName(){
+  myName = document.getElementById('myName').value.trim() || 'Unnamed boat';
+  localStorage.setItem('rc_name', myName);
+  showToast('Name saved.');
+}
+function saveViewerName(){
+  myName = document.getElementById('viewerNameInput').value.trim() || 'Unnamed boat';
+  localStorage.setItem('rc_name', myName);
+  showToast('Name saved.');
+}
+document.getElementById('myName').value = myName;
+document.getElementById('viewerNameInput').value = myName;
+
+function onViewerFleetChange(){
+  viewerFleetId = document.getElementById('viewerFleetSelect').value || null;
+  renderAll();
+}
+
+/* ============ RENDER ============ */
+function activeCourse(){
+  if(isPro){
+    const f = fleetsDraft[selectedFleetId];
+    if(!f) return null;
+    return {marks:f.marks, params:Object.assign({}, f.params, {windDir:sharedDraft.windDir}), name:f.name, laps:f.laps, courseType:f.courseType, finish:f.finish, roundingDefault:f.roundingDefault, color:f.color};
+  }
+  const f = liveFleets[viewerFleetId];
+  if(!f) return null;
+  return {marks:f.marks, params:Object.assign({}, f.params, {windDir:f.windDir}), name:f.name, laps:f.laps, courseType:f.courseType, finish:f.finish, roundingDefault:f.roundingDefault, color:f.color};
+}
+
+function renderMarks(){
+  markLayer.clearLayers();
+  lineLayer.clearLayers();
+  const c = activeCourse();
+  const list = c && c.marks ? [...c.marks].sort((a,b)=>(a.order||9)-(b.order||9)) : [];
+
+  const marksListEl = document.getElementById('marksList');
+  if(isPro) marksListEl.innerHTML = '';
+  document.getElementById('marksFleetLabel').textContent = c ? c.name : '—';
+
+  list.forEach(m=>{
+    const assignedUser = Object.values(users).find(u=>u.assignedMarkId===m.id);
+    const marker = L.marker([m.lat,m.lon], {
+      icon: markDivIcon(m.type, (m.label||'').slice(0,2), m.locked, !!assignedUser, m.rounding),
+      draggable: isPro,
+    }).addTo(markLayer);
+    marker.bindTooltip(m.label + (m.rounding && MARK_META[m.type] && MARK_META[m.type].roundable ? ' ('+(m.rounding==='P'?'Port':'Starboard')+')' : ''), {permanent:false, direction:'top'});
+    if(isPro){
+      marker.on('dragend', (ev)=>{
+        const ll = ev.target.getLatLng();
+        const f = fleetsDraft[selectedFleetId];
+        const dm = f.marks.find(x=>x.id===m.id);
+        if(dm){
+          dm.lat=ll.lat; dm.lon=ll.lng;
+          if(dm.type==='custom' || dm.type==='finishA' || dm.type==='finishB'){
+            const off = polarOffsetFor(sharedDraft.ref, sharedDraft.windDir, ll.lat, ll.lng);
+            dm.distFromRef = off.distFromRef; dm.bearingOffsetFromWind = off.bearingOffsetFromWind;
+          }
+          saveDraftToFirebase(selectedFleetId);
+          showToast(dm.label+' moved. Lock it to keep this spot through wind changes.');
+          renderStats();
+        }
+      });
+    }
+
+    if(isPro){
+      const row = document.createElement('div');
+      row.className = 'mark-row';
+      const editableLabel = (m.type==='custom' || m.type==='finishA' || m.type==='finishB');
+      const roundable = MARK_META[m.type] && MARK_META[m.type].roundable;
+      row.innerHTML = `
+        <div class="mark-swatch" style="background:${m.color}"></div>
+        <div class="mark-info">
+          ${editableLabel ? `<input class="name-edit" value="${m.label}" data-id="${m.id}">` : `<div class="name-static">${m.label}</div>`}
+          <div class="coords">${m.lat.toFixed(5)}, ${m.lon.toFixed(5)}${assignedUser? ' • assigned: '+assignedUser.name:''}</div>
+        </div>
+        <div class="mark-actions">
+          ${roundable ? `<div class="icon-btn rounding-${m.rounding||'P'}" title="Rounding">${m.rounding||'P'}</div>` : ''}
+          <div class="icon-btn ${m.locked?'locked':''}" title="Lock">${m.locked?'\u{1F512}':'\u{1F513}'}</div>
+          ${(m.type==='custom'||m.type==='finishA'||m.type==='finishB') ? `<div class="icon-btn" title="Delete">\u2715</div>` : ''}
+        </div>`;
+      if(editableLabel){
+        const input = row.querySelector('.name-edit');
+        input.onchange = ()=>{
+          const f = fleetsDraft[selectedFleetId];
+          const dm = f.marks.find(x=>x.id===m.id);
+          dm.label = input.value || dm.label;
+          saveDraftToFirebase(selectedFleetId);
+          renderMarks();
+        };
+      }
+      const iconBtns = row.querySelectorAll('.icon-btn');
+      let idx = 0;
+      if(roundable){
+        const rBtn = iconBtns[idx++];
+        rBtn.onclick = ()=>{
+          const f = fleetsDraft[selectedFleetId];
+          const dm = f.marks.find(x=>x.id===m.id);
+          dm.rounding = dm.rounding==='P' ? 'S' : 'P';
+          saveDraftToFirebase(selectedFleetId);
+          renderAll();
+        };
+      }
+      const lockBtn = iconBtns[idx++];
+      lockBtn.onclick = ()=>{
+        const f = fleetsDraft[selectedFleetId];
+        const dm = f.marks.find(x=>x.id===m.id);
+        dm.locked = !dm.locked;
+        saveDraftToFirebase(selectedFleetId);
+        renderAll();
+      };
+      if(m.type==='custom'||m.type==='finishA'||m.type==='finishB'){
+        const delBtn = iconBtns[idx];
+        delBtn.onclick = ()=>{
+          const f = fleetsDraft[selectedFleetId];
+          f.marks = f.marks.filter(x=>x.id!==m.id);
+          saveDraftToFirebase(selectedFleetId);
+          renderAll();
+        };
+      }
+      marksListEl.appendChild(row);
+    }
+  });
+
+  const byId = {}; list.forEach(m=>byId[m.id]=m);
+  if(byId.signal && byId.pin){
+    L.polyline([[byId.signal.lat,byId.signal.lon],[byId.pin.lat,byId.pin.lon]], {color:'#F4F1E8', weight:2, dashArray:'4,6', opacity:0.85}).addTo(lineLayer);
+  }
+  if(byId.gateL && byId.gateR){
+    L.polyline([[byId.gateL.lat,byId.gateL.lon],[byId.gateR.lat,byId.gateR.lon]], {color:'#FF6B35', weight:2, dashArray:'4,6', opacity:0.85}).addTo(lineLayer);
+  }
+  if(byId.finishA && byId.finishB){
+    L.polyline([[byId.finishA.lat,byId.finishA.lon],[byId.finishB.lat,byId.finishB.lon]], {color:'#4EA1D3', weight:3, dashArray:'2,6', opacity:0.95}).addTo(lineLayer);
+  } else if(c && c.finish && c.finish.mode==='same_as_start' && byId.signal && byId.pin){
+    L.polyline([[byId.signal.lat,byId.signal.lon],[byId.pin.lat,byId.pin.lon]], {color:'#4EA1D3', weight:1, dashArray:'1,10', opacity:0.6}).addTo(lineLayer);
+  }
+}
+
+function renderStats(){
+  const c = activeCourse();
+  const el = document.getElementById('courseStats');
+  el.innerHTML = '';
+  if(!c || !c.marks || !c.marks.length){ el.innerHTML = '<div class="hint">No course generated yet.</div>'; return; }
+  const byId = {}; c.marks.forEach(m=>byId[m.id]=m);
+  function stat(k,v){ const d=document.createElement('div'); d.className='stat-box'; d.innerHTML=`<div class="k">${k}</div><div class="v">${v}</div>`; el.appendChild(d); }
+  const signal = byId.signal, pin = byId.pin, weather = byId.weather;
+  if(signal && pin){
+    const len = haversineMeters(signal.lat,signal.lon,pin.lat,pin.lon);
+    const lineBearing = bearingDeg(signal.lat,signal.lon,pin.lat,pin.lon);
+    let bias = norm360(lineBearing - norm360(c.params.windDir+90));
+    if(bias>180) bias -= 360;
+    stat('Start line', Math.round(len)+' m');
+    stat('Line bias', (bias>=0?'+':'')+bias.toFixed(0)+'\u00B0 '+(bias>=0?'(pin favored)':'(boat favored)'));
+  }
+  if(signal && weather) stat('Beat distance', Math.round(haversineMeters(signal.lat,signal.lon,weather.lat,weather.lon))+' m');
+  const seq = ['signal','weather','offset','wing','wingL','wingR','leeward','gateL'];
+  let total=0, prev=null;
+  seq.forEach(id=>{ const m = byId[id]; if(m){ if(prev) total += haversineMeters(prev.lat,prev.lon,m.lat,m.lon); prev=m; } });
+  if(total>0) stat('Lap distance (approx.)', (total/1000).toFixed(2)+' km');
+  stat('Laps', c.laps||1);
+  if(total>0) stat('Total course (approx.)', (total*(c.laps||1)/1000).toFixed(2)+' km');
+  stat('Wind from', Math.round(c.params.windDir||0)+'\u00B0');
+}
+
+function renderBoats(){
+  boatLayer.clearLayers();
+  assignLineLayer.clearLayers();
+  const boatsListEl = document.getElementById('boatsList');
+  if(isPro) boatsListEl.innerHTML = '';
+  const c = activeCourse();
+  const marksById = {}; (c && c.marks ? c.marks : []).forEach(m=>marksById[m.id]=m);
+
+  Object.entries(users).forEach(([sid,u])=>{
+    if(typeof u.lat!=='number') return;
+    L.marker([u.lat,u.lon], {icon: boatDivIcon(u.heading, !!u.isPro, u.name)}).addTo(boatLayer);
+
+    if(isPro){
+      const row = document.createElement('div');
+      row.className = 'boat-row';
+      let selectHtml = '';
+      if(c && c.marks && c.marks.length){
+        const opts = c.marks.map(m=>`<option value="${m.id}" ${u.assignedMarkId===m.id?'selected':''}>${m.label}</option>`).join('');
+        selectHtml = `<div class="boat-assign"><select data-sid="${sid}"><option value="">— assign —</option>${opts}</select></div>`;
+      }
+      row.innerHTML = `<div class="boat-dot ${u.isPro?'pro':''}"></div><div class="boat-name">${u.name||'Unnamed'}${sid===sessionId?' (you)':''}</div>${selectHtml}`;
+      boatsListEl.appendChild(row);
+      const sel = row.querySelector('select');
+      if(sel){ sel.onchange = ()=>{ db.ref('users/'+sid+'/assignedMarkId').set(sel.value || null); }; }
+    }
+
+    if(sid===sessionId && u.assignedMarkId && marksById[u.assignedMarkId]){
+      const target = marksById[u.assignedMarkId];
+      L.polyline([[u.lat,u.lon],[target.lat,target.lon]], {color:'#2EC4B6', weight:2, dashArray:'2,8'}).addTo(assignLineLayer);
+      const dist = haversineMeters(u.lat,u.lon,target.lat,target.lon);
+      const brg = bearingDeg(u.lat,u.lon,target.lat,target.lon);
+      document.getElementById('assignTag').textContent = 'YOUR ASSIGNMENT';
+      document.getElementById('assignName').textContent = target.label;
+      document.getElementById('assignStats').textContent = Math.round(dist)+' m @ '+Math.round(brg)+'\u00B0';
+      document.getElementById('assign-readout').classList.add('show');
+    } else if(sid===sessionId){
+      document.getElementById('assign-readout').classList.remove('show');
+    }
+  });
+}
+
+function renderViewerCard(){
+  if(isPro) return;
+  const sel = document.getElementById('viewerFleetSelect');
+  const keys = Object.keys(liveFleets);
+  const currentVal = viewerFleetId;
+  sel.innerHTML = keys.length ? '' : '<option value="">No fleets published yet</option>';
+  keys.forEach(fid=>{
+    const f = liveFleets[fid];
+    const opt = document.createElement('option');
+    opt.value = fid; opt.textContent = f.name;
+    if(fid===currentVal) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if(!viewerFleetId && keys.length){ viewerFleetId = keys[0]; sel.value = viewerFleetId; }
+
+  const c = activeCourse();
+  document.getElementById('viewerCourseName').textContent = c ? c.name : 'No course published';
+  document.getElementById('viewerCourseCode').textContent = c ? fleetCodeString(c) : '';
+  const legend = document.getElementById('viewerLegend');
+  legend.innerHTML = '';
+  if(c && c.marks){
+    [...c.marks].sort((a,b)=>(a.order||9)-(b.order||9)).forEach(m=>{
+      const roundable = MARK_META[m.type] && MARK_META[m.type].roundable;
+      const row = document.createElement('div');
+      row.className = 'legend-row';
+      row.innerHTML = `<span class="legend-swatch" style="background:${m.color}"></span><span>${m.label}</span>${roundable?`<span class="badge-rs">${m.rounding||'P'}</span>`:''}`;
+      legend.appendChild(row);
+    });
+  }
+}
+
+function renderAll(){
+  const c = activeCourse();
+  if(isPro){
+    document.getElementById('courseStatePill').textContent = 'EDITING DRAFT';
+    document.getElementById('courseStatePill').className = 'course-state draft';
+  } else {
+    document.getElementById('courseStatePill').textContent = c ? 'LIVE' : 'NO COURSE';
+    document.getElementById('courseStatePill').className = 'course-state live';
+    setNeedle(c ? c.params.windDir : 0);
+  }
+  renderMarks();
+  renderStats();
+  renderBoats();
+  renderViewerCard();
+}
+
+/* ============ EXPORT ============ */
+function downloadBlob(filename, content, type){
+  const blob = new Blob([content], {type});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
+function exportCSV(){
+  const c = activeCourse();
+  if(!c || !c.marks){ showToast('No course to export.'); return; }
+  let csv = 'label,type,rounding,lat,lon\n';
+  c.marks.forEach(m=>{ csv += `${m.label},${m.type},${m.rounding||''},${m.lat},${m.lon}\n`; });
+  downloadBlob((c.name||'race_course')+'.csv', csv, 'text/csv');
+}
+function exportGPX(){
+  const c = activeCourse();
+  if(!c || !c.marks){ showToast('No course to export.'); return; }
+  let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="RaceMaster">\n`;
+  c.marks.forEach(m=>{ gpx += `  <wpt lat="${m.lat}" lon="${m.lon}"><name>${m.label}</name></wpt>\n`; });
+  gpx += `</gpx>`;
+  downloadBlob((c.name||'race_course')+'.gpx', gpx, 'application/gpx+xml');
+}
+
+/* ============ FIREBASE LISTENERS ============ */
+function initListeners(){
+  if(!fbReady){ showToast('Firebase not configured — check FIREBASE_CONFIG.'); return; }
+  document.getElementById('connDot').classList.remove('off');
+  db.ref('.info/connected').on('value', snap=>{ document.getElementById('connDot').classList.toggle('off', !snap.val()); });
+
+  db.ref('courses/live/fleets').on('value', snap=>{
+    liveFleets = snap.val() || {};
+    if(!isPro) renderAll();
+  });
+  db.ref('users').on('value', snap=>{ users = snap.val() || {}; renderBoats(); renderViewerCard(); });
+  db.ref('templates').on('value', snap=>{ if(isPro) loadTemplatesUI(snap.val()); });
+}
+
+/* ============ BOOT ============ */
+function boot(){
+  updateRoleUI();
+  renderAll();
+  startGeoWatch();
+  initListeners();
+  if(!myName){ showNameModal(); }
+}
+boot();
+</script>
+</body>
+</html>
